@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Tempo Extension",
+  "description": "Extends Tempo experience",
+  "version": "1.0",
+  "permissions": [
+    "notifications",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "bg-wrapper.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.alp-pulse.com/*"],
+      "js": ["content-script.js"]
+    }
+  ],
+  "icons": {
+    "48": "/icons/favicon.ico"
+  }
+}
