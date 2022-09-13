@@ -1,16 +1,18 @@
 'use strict';
 class TempoExtension {
   static PULL_WORK = 'Pull Work';
+  static TIMED_OUT = 'TIMED OUT';
   static DEFAULT_TIMER_INTERVAL_SECONDS = 60;
   static clickPullWorkInterval = null;
-  static remainingTimeInterval = null;
-  static lastMinutesMatcher = /^(?:\dm )?\d{1,2}s$/;
+  static remainingTimeObserver = null;
+  static lastMinutesMatcher = /^\dm/;
+  static lastMinutesSet = new Set();
 
   static start() {
     if (this.getPullWorkButton()) {
       this.registerClickPullWorkInterval();
     } else if (this.getRemainingTimeSpan()) {
-      this.registerRemainingTimeInterval();
+      this.registerRemainingTimeObserver();
     }
   }
 
@@ -38,7 +40,7 @@ class TempoExtension {
       this.notifyUser('Ticket fetched');
       clearInterval(this.clickPullWorkInterval);
       this.clickPullWorkInterval = null;
-      this.registerRemainingTimeInterval();
+      this.registerRemainingTimeObserver();
     }
   }
 
@@ -46,18 +48,19 @@ class TempoExtension {
     return document.querySelector('div[data-test-id="CircularProgressbarWithChildren"]')?.querySelector('span');
   }
 
-  static checkRemainingTime() {
-    const span = this.getRemainingTimeSpan();
-
-    if (span) {
-      const remainingTime = span.textContent;
-      if (this.lastMinutesMatcher.test(remainingTime)) {
+  static checkRemainingTime(mutationList) {
+    const targetTextContent = mutationList[0].target.textContent;
+    const matches = targetTextContent.match(this.lastMinutesMatcher);
+    if (matches) {
+      const remainingTime = matches[0];
+      if (!this.lastMinutesSet.has(remainingTime)) {
+        this.lastMinutesSet.add(remainingTime);
         this.notifyUser(`Last minutes of SLA! ${remainingTime} remained`);
       }
-    } else {
-      this.notifyUser('No ticket');
-      clearInterval(this.remainingTimeInterval);
-      this.remainingTimeInterval = null;
+    } else if (targetTextContent === this.TIMED_OUT) {
+      this.notifyUser('SLA timed out');
+      this.unregisterRemainingTimeObserver();
+      this.lastMinutesSet.clear();
       this.registerClickPullWorkInterval();
     }
   }
@@ -82,10 +85,28 @@ class TempoExtension {
       this.getTimerInterval());
   }
 
-  static registerRemainingTimeInterval() {
-    this.remainingTimeInterval = setInterval(
-      this.checkRemainingTime.bind(this),
-      this.getTimerInterval());
+  static registerRemainingTimeObserver() {
+    // Select the node that will be observed for mutations
+    const targetNode = this.getRemainingTimeSpan();
+
+    // Options for the observer (which mutations to observe)
+    const config = {
+      attributes: true,
+      childList: true,
+      subtree: true,
+      characterData: true,
+    };
+
+    // Create an observer instance linked to the callback function
+    this.remainingTimeObserver = new MutationObserver(this.checkRemainingTime.bind(this));
+
+    // Start observing the target node for configured mutations
+    this.remainingTimeObserver.observe(targetNode, config);
+  }
+
+  static unregisterRemainingTimeObserver() {
+    this.remainingTimeObserver.disconnect();
+    this.remainingTimeObserver = null;
   }
 }
 
