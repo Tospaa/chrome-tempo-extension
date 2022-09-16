@@ -2,17 +2,18 @@
 class TempoExtension {
   static PULL_WORK = 'Pull Work';
   static TIMED_OUT = 'TIMED OUT';
-  static DEFAULT_TIMER_INTERVAL_SECONDS = 60;
+  static CHARACTER_DATA = 'characterData';
+  static CHILD_LIST = 'childList';
+  static DEFAULT_TIMER_INTERVAL_SECONDS = 15;
   static clickPullWorkInterval = null;
-  static remainingTimeObserver = null;
+  static documentObserver = null;
   static lastMinutesMatcher = /^\dm/;
   static lastMinutesSet = new Set();
 
   static start() {
+    this.registerDocumentObserver();
     if (this.getPullWorkButton()) {
       this.registerClickPullWorkInterval();
-    } else if (this.getRemainingTimeSpan()) {
-      this.registerRemainingTimeObserver();
     }
   }
 
@@ -37,32 +38,12 @@ class TempoExtension {
     if (button) {
       button.click();
     } else {
-      this.notifyUser('Ticket fetched');
-      clearInterval(this.clickPullWorkInterval);
-      this.clickPullWorkInterval = null;
-      this.registerRemainingTimeObserver();
+      this.unregisterClickPullWorkInterval();
     }
   }
 
   static getRemainingTimeSpan() {
     return document.querySelector('div[data-test-id="CircularProgressbarWithChildren"]')?.querySelector('span');
-  }
-
-  static checkRemainingTime(mutationList) {
-    const targetTextContent = mutationList[0].target.textContent;
-    const matches = targetTextContent.match(this.lastMinutesMatcher);
-    if (matches) {
-      const remainingTime = matches[0];
-      if (!this.lastMinutesSet.has(remainingTime)) {
-        this.lastMinutesSet.add(remainingTime);
-        this.notifyUser(`Last minutes of SLA! ${remainingTime} remained`);
-      }
-    } else if (targetTextContent === this.TIMED_OUT) {
-      this.notifyUser('SLA timed out');
-      this.unregisterRemainingTimeObserver();
-      this.lastMinutesSet.clear();
-      this.registerClickPullWorkInterval();
-    }
   }
 
   static notifyUser(message) {
@@ -71,7 +52,7 @@ class TempoExtension {
         action: 'notify-user',
         message
       },
-      function(response) {
+      function (response) {
         if (response.action !== 'done') {
           console.error('an error occured during notify user', response.error);
         }
@@ -80,33 +61,149 @@ class TempoExtension {
   }
 
   static registerClickPullWorkInterval() {
+    if (this.clickPullWorkInterval !== null) return;
+
+    this.lastMinutesSet.clear();
+
     this.clickPullWorkInterval = setInterval(
       this.clickPullWork.bind(this),
       this.getTimerInterval());
   }
 
-  static registerRemainingTimeObserver() {
+  static unregisterClickPullWorkInterval() {
+    clearInterval(this.clickPullWorkInterval);
+    this.clickPullWorkInterval = null;
+  }
+
+  static registerDocumentObserver() {
     // Select the node that will be observed for mutations
-    const targetNode = this.getRemainingTimeSpan();
+    const targetNode = document;
 
     // Options for the observer (which mutations to observe)
     const config = {
-      attributes: true,
+      attributes: false,
       childList: true,
       subtree: true,
       characterData: true,
     };
 
     // Create an observer instance linked to the callback function
-    this.remainingTimeObserver = new MutationObserver(this.checkRemainingTime.bind(this));
+    this.documentObserver = new MutationObserver(this.checkDocumentChanges.bind(this));
 
     // Start observing the target node for configured mutations
-    this.remainingTimeObserver.observe(targetNode, config);
+    this.documentObserver.observe(targetNode, config);
   }
 
-  static unregisterRemainingTimeObserver() {
-    this.remainingTimeObserver.disconnect();
-    this.remainingTimeObserver = null;
+  static checkDocumentChanges(mutationList) {
+    for (let mutation of mutationList) {
+      const { detected, remainingTime } = this.detectLastMinutes(mutation);
+      if (detected) {
+        this.notifyUser(`Last minutes of SLA! ${remainingTime} remained`);
+        break;
+      }
+
+      if (this.detectSlaTimedOut(mutation)) {
+        this.notifyUser('SLA timed out');
+        this.registerClickPullWorkInterval();
+        break;
+      }
+
+      if (this.detectTicketProcessed(mutation)) {
+        this.registerClickPullWorkInterval();
+        break;
+      }
+
+      if (this.detectTicketFetched(mutation)) {
+        this.notifyUser('Ticket fetched');
+        this.unregisterClickPullWorkInterval();
+        break;
+      }
+    }
+  }
+
+  static detectLastMinutes(mutation) {
+    let detected = false;
+    let remainingTime;
+    if (mutation.type !== this.CHARACTER_DATA) {
+      return { detected, remainingTime };
+    }
+
+    const targetTextContent = mutation.target.textContent;
+    const matches = targetTextContent.match(this.lastMinutesMatcher);
+    if (matches) {
+      remainingTime = matches[0];
+      if (!this.lastMinutesSet.has(remainingTime)) {
+        this.lastMinutesSet.add(remainingTime);
+        detected = true;
+      }
+    }
+
+    return { detected, remainingTime };
+  }
+
+  static detectTicketProcessed(mutation) {
+    if (mutation.type !== this.CHILD_LIST || mutation.addedNodes?.length === 0) {
+      return false;
+    }
+
+    for (let node of mutation.addedNodes) {
+      const textsSet = this.findNestedTagTextContent(node, 'P');
+      if (textsSet.has('Task Rejected')
+        || textsSet.has('Task Submitted')) {
+        return true;
+      }
+    }
+
+    console.log('detectTicketProcessed', mutation);
+    return undefined;
+  }
+
+  static detectSlaTimedOut(mutation) {
+    if (mutation.type !== this.CHARACTER_DATA) {
+      return false;
+    }
+
+    const targetTextContent = mutation.target.textContent;
+
+    return targetTextContent === this.TIMED_OUT;
+  }
+
+  static detectTicketFetched(mutation) {
+    if (mutation.type !== this.CHILD_LIST || mutation.addedNodes?.length === 0) {
+      return false;
+    }
+
+    for (let node of mutation.addedNodes) {
+      const textsSet = this.findNestedTagTextContent(node, 'SPAN');
+      if (textsSet.has('Assignee')
+        && textsSet.has('Work type')
+        && textsSet.has('SLA')) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  static findNestedTagTextContent(node, tagName) {
+    let textsSet = new Set();
+    if (node.tagName === tagName) {
+      textsSet.add(node.textContent);
+    }
+
+    if (!node.children[Symbol.iterator]) {
+      // means node.children is not iterable
+      return textsSet
+    }
+
+    for (let child of node.children) {
+      const nestedTextsSet = this.findNestedTagTextContent(child, tagName);
+      if (nestedTextsSet.size > 0) {
+        nestedTextsSet.forEach(textsSet.add, textsSet);
+      }
+    }
+
+    return textsSet;
   }
 }
 
