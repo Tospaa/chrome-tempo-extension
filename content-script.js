@@ -4,6 +4,10 @@ class TempoExtension {
   static TIMED_OUT = 'TIMED OUT';
   static CHARACTER_DATA = 'characterData';
   static CHILD_LIST = 'childList';
+  static SPAN = 'SPAN';
+  static ASSIGNEE = 'Assignee';
+  static WORK_TYPE = 'Work type';
+  static SLA = 'SLA';
   static DEFAULT_TIMER_INTERVAL_SECONDS = 15;
   static clickPullWorkInterval = null;
   static documentObserver = null;
@@ -109,6 +113,7 @@ class TempoExtension {
       }
 
       if (this.detectTicketProcessed(mutation)) {
+        this.notifyUser('Ticket processed');
         this.registerClickPullWorkInterval();
         break;
       }
@@ -142,20 +147,21 @@ class TempoExtension {
   }
 
   static detectTicketProcessed(mutation) {
-    if (mutation.type !== this.CHILD_LIST || mutation.addedNodes?.length === 0) {
+    if (mutation.type !== this.CHILD_LIST || mutation.removedNodes?.length === 0) {
       return false;
     }
 
-    for (let node of mutation.addedNodes) {
-      const textsSet = this.findNestedTagTextContent(node, 'P');
-      if (textsSet.has('Task Rejected')
-        || textsSet.has('Task Submitted')) {
+    for (let node of mutation.removedNodes) {
+      const textsSet = this.findNestedTagTextContent(node, this.SPAN);
+      if (textsSet.has(this.ASSIGNEE)
+        && textsSet.has(this.WORK_TYPE)
+        && textsSet.has(this.SLA)) {
         return true;
       }
     }
 
     console.log('detectTicketProcessed', mutation);
-    return undefined;
+    return false;
   }
 
   static detectSlaTimedOut(mutation) {
@@ -174,10 +180,10 @@ class TempoExtension {
     }
 
     for (let node of mutation.addedNodes) {
-      const textsSet = this.findNestedTagTextContent(node, 'SPAN');
-      if (textsSet.has('Assignee')
-        && textsSet.has('Work type')
-        && textsSet.has('SLA')) {
+      const textsSet = this.findNestedTagTextContent(node, this.SPAN);
+      if (textsSet.has(this.ASSIGNEE)
+        && textsSet.has(this.WORK_TYPE)
+        && textsSet.has(this.SLA)) {
         return true;
       }
     }
